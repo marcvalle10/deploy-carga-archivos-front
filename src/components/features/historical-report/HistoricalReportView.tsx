@@ -14,6 +14,18 @@ import { useReports } from "@/hooks/useReports";
 import { FileHistoryRecord, HistoricalRecord } from "@/types";
 import * as XLSX from "xlsx";
 
+type EstructuraProcessResumen = {
+  alumnosUpsert?: number;
+  planesUpsert?: number;
+  warnings?: string[];
+};
+
+type EstructuraProcessResponse = {
+  ok?: boolean;
+  resumen?: EstructuraProcessResumen | null;
+  error?: string;
+};
+
 
 
 // Configurar la fuente Bentham
@@ -117,86 +129,87 @@ export function HistoricalReportView() {
   process.env.NEXT_PUBLIC_API_URL ?? "http://deploy-carga-archivos-backend-production.up.railway.app";
 
   const handleUpload = async (fileParam?: File) => {
-    const fileToUpload = fileParam ?? uploadedFile;
-    if (!fileToUpload) return;
+  const fileToUpload = fileParam ?? uploadedFile;
+  if (!fileToUpload) return;
 
-    try {
-      // 1) SUBIR ARCHIVO (registrar en archivo_cargado)
-      const uploadResponse = await uploadFile(
-        `${API_BASE_URL}/estructura/upload`,
-        fileToUpload,
-        "file"
+  try {
+    // 1) SUBIR ARCHIVO (registrar en archivo_cargado)
+    const uploadResponse = await uploadFile(
+      `${API_BASE_URL}/estructura/upload`,
+      fileToUpload,
+      "file"
+    );
+
+    // El back te regresa algo tipo: { ok: true, archivoId, estado_proceso }
+    const archivoId: number | undefined =
+      uploadResponse?.archivoId ?? uploadResponse?.id;
+
+    if (!archivoId) {
+      throw new Error(
+        "El servidor no devolvió un archivoId para el archivo subido."
       );
-
-      // El back te regresa algo tipo: { ok: true, archivoId, estado_proceso }
-      const archivoId: number | undefined =
-        uploadResponse?.archivoId ?? uploadResponse?.id;
-
-      if (!archivoId) {
-        throw new Error(
-          "El servidor no devolvió un archivoId para el archivo subido."
-        );
-      }
-
-      // 2) PROCESAR / INGESTAR ESTRUCTURA
-      const processRes = await fetch(
-        `${API_BASE_URL}/estructura/process/${archivoId}`,
-        {
-          method: "POST",
-        }
-      );
-
-      if (!processRes.ok) {
-        const errorBody = await processRes.text();
-        console.error("Error en /estructura/process:", errorBody);
-        throw new Error("Error al procesar el archivo en el servidor.");
-      }
-
-      let processJson: any = null;
-      try {
-        processJson = await processRes.json();
-      } catch {
-        // si no viene JSON, no tronamos, solo seguimos
-      }
-
-      // 3) REFRESCAR TABLAS (histórico + archivos)
-      await Promise.all([refreshStudents(), refreshFiles()]);
-
-      // 4) Limpiar estado / cerrar modal
-      setUploadedFile(null);
-      setShowUploadModal(false);
-
-      // 5) Mostrar alerta de éxito usando el resumen si existe
-      const alumnosUpsert = processJson?.resumen?.alumnosUpsert;
-      const planesUpsert = processJson?.resumen?.planesUpsert;
-
-      let message =
-        "El archivo se procesó exitosamente y los registros ya están en la tabla.";
-
-      if (typeof alumnosUpsert === "number" || typeof planesUpsert === "number") {
-        message = `El archivo se procesó exitosamente. Alumnos afectados: ${
-          alumnosUpsert ?? 0
-        }, planes actualizados/insertados: ${planesUpsert ?? 0}.`;
-      }
-
-      setAlertModal({
-        type: "success",
-        title: "Archivo procesado",
-        message,
-      });
-    } catch (err) {
-      console.error("Error al subir/procesar archivo (historial):", err);
-
-      setAlertModal({
-        type: "error",
-        title: "Error al procesar archivo",
-        message:
-          err instanceof Error
-            ? err.message
-            : "No se pudo procesar el archivo del historial. Verifica el archivo e intenta nuevamente.",
-      });
     }
-  };
+
+    // 2) PROCESAR / INGESTAR ESTRUCTURA
+    const processRes = await fetch(
+      `${API_BASE_URL}/estructura/process/${archivoId}`,
+      {
+        method: "POST",
+      }
+    );
+
+    if (!processRes.ok) {
+      const errorBody = await processRes.text();
+      console.error("Error en /estructura/process:", errorBody);
+      throw new Error("Error al procesar el archivo en el servidor.");
+    }
+
+    // 👇 Aquí quitamos el any explícito
+    let processJson: EstructuraProcessResponse | null = null;
+    try {
+      processJson = (await processRes.json()) as EstructuraProcessResponse;
+    } catch {
+      // Si no viene JSON (o viene vacío), no reventamos.
+    }
+
+    // 3) REFRESCAR TABLAS (histórico + archivos)
+    await Promise.all([refreshStudents(), refreshFiles()]);
+
+    // 4) Limpiar estado / cerrar modal
+    setUploadedFile(null);
+    setShowUploadModal(false);
+
+    // 5) Mostrar alerta de éxito usando el resumen si existe
+    const alumnosUpsert = processJson?.resumen?.alumnosUpsert;
+    const planesUpsert = processJson?.resumen?.planesUpsert;
+
+    let message =
+      "El archivo se procesó exitosamente y los registros ya están en la tabla.";
+
+    if (typeof alumnosUpsert === "number" || typeof planesUpsert === "number") {
+      message = `El archivo se procesó exitosamente. Alumnos afectados: ${
+        alumnosUpsert ?? 0
+      }, planes actualizados/insertados: ${planesUpsert ?? 0}.`;
+    }
+
+    setAlertModal({
+      type: "success",
+      title: "Archivo procesado",
+      message,
+    });
+  } catch (err) {
+    console.error("Error al subir/procesar archivo (historial):", err);
+
+    setAlertModal({
+      type: "error",
+      title: "Error al procesar archivo",
+      message:
+        err instanceof Error
+          ? err.message
+          : "No se pudo procesar el archivo del historial. Verifica el archivo e intenta nuevamente.",
+    });
+  }
+};
 
 
    const handleExport = () => {
