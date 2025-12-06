@@ -47,7 +47,7 @@ export default function PlanReportView() {
   const [viewMode, setViewMode] = useState<ViewMode>("table");
   const [historial, setHistorial] = useState<HistorialItemUI[]>([]);
   const [records, setRecords] = useState<PlanRecord[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [/*loading*/, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   // filtros
