@@ -2,9 +2,10 @@ import { supabase } from "@/lib/supabase";
 import { PlanRecord } from "@/types";
 
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://deploy-carga-archivos-backend-production.up.railway.app";
-
-  async function safeJson<T>(resp: Response): Promise<T> {
+  process.env.NEXT_PUBLIC_API_URL ??
+  "https://deploy-carga-archivos-backend-production.up.railway.app";
+  
+async function safeJson<T>(resp: Response): Promise<T> {
   const data = (await resp.json()) as unknown;
   return data as T;
 }
@@ -30,11 +31,40 @@ type MateriaRow = {
   plan?: PlanRow | PlanRow[] | null;
 };
 
+// tipo crudo que viene de la VISTA vista_materias_planes
+type MateriaPlanRow = {
+  materia_id: number;
+  codigo: string;
+  nombre: string;
+  creditos: number;
+  tipo: string | null;
+  plan_id: number;
+  plan_nombre: string;
+  plan_version: string;
+  total_creditos: number | null;
+  semestres_sugeridos: number | null;
+};
 
-// === MAPEO A PlanRecord PARA LA UI ===
+// === MAPPERS ===
 
-function mapMateriaToPlanRecord(row: MateriaRow): PlanRecord {
-  // Normalizar: si viene como arreglo, nos quedamos con el primero
+// 1) Para la vista vista_materias_planes
+function mapMateriaPlanRowToPlanRecord(row: MateriaPlanRow): PlanRecord {
+  return {
+    id: row.materia_id,
+    codigo: row.codigo,
+    nombre_materia: row.nombre,
+    creditos: row.creditos,
+    tipo: row.tipo ?? "OBLIGATORIA",
+    plan_id: row.plan_id,
+    plan_nombre: row.plan_nombre,
+    plan_version: row.plan_version,
+    plan_total_creditos: row.total_creditos,
+    plan_semestres_sugeridos: row.semestres_sugeridos,
+  };
+}
+
+// 2) Para la tabla materia + relación plan_estudio
+function mapMateriaRowToPlanRecord(row: MateriaRow): PlanRecord {
   const plan = Array.isArray(row.plan) ? row.plan[0] : row.plan ?? null;
 
   return {
@@ -43,7 +73,6 @@ function mapMateriaToPlanRecord(row: MateriaRow): PlanRecord {
     nombre_materia: row.nombre,
     creditos: row.creditos,
     tipo: row.tipo ?? "OBLIGATORIA",
-
     plan_id: row.plan_estudio_id,
     plan_nombre: plan?.nombre ?? "Sin plan",
     plan_version: plan?.version ?? "N/A",
@@ -52,6 +81,19 @@ function mapMateriaToPlanRecord(row: MateriaRow): PlanRecord {
   };
 }
 
+// === HISTORIAL DE ARCHIVOS DE PLAN ===
+
+export interface PlanHistorialItem {
+  id: number;
+  fecha: string; // ISO string
+  nombre_archivo: string;
+  estado: string;
+}
+
+type PlanHistorialResponse = {
+  ok?: boolean;
+  items?: PlanHistorialItem[];
+};
 
 export async function getPlanHistorial(
   limit = 50
@@ -71,21 +113,6 @@ export async function getPlanHistorial(
 
   return Array.isArray(json.items) ? json.items : [];
 }
-
-
-export interface PlanHistorialItem {
-  id: number;
-  fecha: string;          // ISO string
-  nombre_archivo: string;
-  estado: string;
-}
-
-type PlanHistorialResponse = {
-  ok?: boolean;
-  items?: PlanHistorialItem[];
-};
-
-
 
 // === CATÁLOGO DE PLANES ===
 
@@ -117,23 +144,9 @@ export async function getPlanesCatalog(): Promise<PlanOption[]> {
 
 export async function getPlanMaterias(): Promise<PlanRecord[]> {
   const { data, error } = await supabase
-    .from("materia")
+    .from("vista_materias_planes")
     .select(
-      `
-      id,
-      codigo,
-      nombre,
-      creditos,
-      tipo,
-      plan_estudio_id,
-      plan:plan_estudio (
-        id,
-        nombre,
-        version,
-        total_creditos,
-        semestres_sugeridos
-      )
-    `
+      "materia_id, codigo, nombre, creditos, tipo, plan_id, plan_nombre, plan_version, total_creditos, semestres_sugeridos"
     )
     .order("codigo");
 
@@ -142,8 +155,8 @@ export async function getPlanMaterias(): Promise<PlanRecord[]> {
     throw error;
   }
 
-  const rows = (data ?? []) as MateriaRow[];
-  return rows.map(mapMateriaToPlanRecord);
+  const rows = (data ?? []) as MateriaPlanRow[];
+  return rows.map(mapMateriaPlanRowToPlanRecord);
 }
 
 // === CREAR / EDITAR / ELIMINAR MATERIA ===
@@ -198,7 +211,8 @@ export async function createPlanMateria(
     throw error;
   }
 
-  return mapMateriaToPlanRecord(data as MateriaRow);
+  // aquí data tiene shape MateriaRow, así que usamos el mapper correcto
+  return mapMateriaRowToPlanRecord(data as MateriaRow);
 }
 
 export async function updatePlanMateria(
@@ -235,7 +249,7 @@ export async function updatePlanMateria(
     throw error;
   }
 
-  return mapMateriaToPlanRecord(data as MateriaRow);
+  return mapMateriaRowToPlanRecord(data as MateriaRow);
 }
 
 export async function deletePlanMateria(id: number): Promise<void> {
@@ -318,3 +332,4 @@ export async function uploadPlanPdf(
   const json = (await resp.json()) as PlanUploadResponse;
   return json;
 }
+

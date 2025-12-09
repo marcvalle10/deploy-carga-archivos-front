@@ -235,9 +235,40 @@ const getEstadoPillClasses = (estado: string) => {
       setUploadLoading(true);
       setErrorMsg(null);
 
-      const resp = await uploadPlanPdf(uploadFile, { debug: true });
+      // 👇 ahora forzamos la ingesta aunque el hash ya exista
+      const resp = await uploadPlanPdf(uploadFile, { debug: true, force: true });
       setLastUpload(resp);
 
+      // Si por alguna razón el back regresa ok=false, lo tratamos como error
+      if (!resp.ok) {
+        const msg =
+          "El servidor reportó un error al procesar el plan de estudios.";
+        setErrorMsg(msg);
+        setAlert({
+          kind: "error",
+          title: "Error al procesar plan",
+          message: msg,
+        });
+        return;
+      }
+
+      // Si en algún caso futuro siguiera viniendo DUPLICATE_HASH_SKIPPED, lo avisamos
+      if (resp.action === "DUPLICATE_HASH_SKIPPED") {
+        const msg =
+          "El archivo ya había sido procesado previamente; no se volvió a ingestar.";
+        setErrorMsg(msg);
+        setAlert({
+          kind: "error",
+          title: "Archivo duplicado",
+          message: msg,
+        });
+        // igual recargamos por si las materias ya existían
+        await loadData();
+        setViewMode("table");
+        return;
+      }
+
+      // ✅ Ingesta normal
       await loadData();
       setViewMode("table");
 
@@ -250,7 +281,9 @@ const getEstadoPillClasses = (estado: string) => {
     } catch (err) {
       console.error("Error al subir plan:", err);
       const msg =
-        "Ocurrió un error al subir o procesar el plan de estudios.";
+        err instanceof Error
+          ? err.message
+          : "Ocurrió un error al subir o procesar el plan de estudios.";
       setErrorMsg(msg);
       setAlert({
         kind: "error",
@@ -261,6 +294,7 @@ const getEstadoPillClasses = (estado: string) => {
       setUploadLoading(false);
     }
   };
+
 
 
   // edición / creación

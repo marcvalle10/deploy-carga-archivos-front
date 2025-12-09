@@ -50,12 +50,8 @@ export async function uploadHorarios(
 ): Promise<{ archivoIdISI?: number; archivoIdPrelistas?: number }> {
   const formData = new FormData();
 
-  if (isiFile) {
-    formData.append("isi", isiFile);
-  }
-  if (preFile) {
-    formData.append("prelistas", preFile);
-  }
+  if (isiFile) formData.append("isi", isiFile);
+  if (preFile) formData.append("prelistas", preFile);
 
   const resp = await fetch(`${API_BASE}/horarios/upload`, {
     method: "POST",
@@ -66,7 +62,7 @@ export async function uploadHorarios(
     throw new Error("Error al subir archivos de horarios");
   }
 
-  const json = await safeJson<UploadResponse>(resp);
+   const json = await safeJson<UploadResponse>(resp);
 
   return {
     archivoIdISI: json.isi?.archivoId,
