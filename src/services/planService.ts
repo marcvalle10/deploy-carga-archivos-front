@@ -4,34 +4,29 @@ import { PlanRecord } from "@/types";
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ??
   "https://deploy-carga-archivos-backend-production.up.railway.app";
-  
+
 async function safeJson<T>(resp: Response): Promise<T> {
   const data = (await resp.json()) as unknown;
   return data as T;
 }
 
-// === RAW TYPES QUE VIENEN DE SUPABASE ===
+// === Helper para extraer mensaje de error sin usar "any" ===
 
-type PlanRow = {
-  id: number;
-  nombre: string;
-  version: string;
-  total_creditos: number | null;
-  semestres_sugeridos: number | null;
-};
+function extractErrorMessage(error: unknown): string {
+  if (typeof error === "string") return error.toLowerCase();
 
-type MateriaRow = {
-  id: number;
-  codigo: string;
-  nombre: string;
-  creditos: number;
-  tipo: string | null;
-  plan_estudio_id: number;
-  // Supabase puede devolver la relación como objeto O como arreglo de objetos
-  plan?: PlanRow | PlanRow[] | null;
-};
+  if (error && typeof error === "object" && "message" in error) {
+    const maybeMessage = (error as { message?: unknown }).message;
+    if (typeof maybeMessage === "string") {
+      return maybeMessage.toLowerCase();
+    }
+  }
 
-// tipo crudo que viene de la VISTA vista_materias_planes
+  return "";
+}
+
+// === RAW TYPES QUE VIENEN DE SUPABASE PARA LA VISTA ===
+
 type MateriaPlanRow = {
   materia_id: number;
   codigo: string;
@@ -47,7 +42,6 @@ type MateriaPlanRow = {
 
 // === MAPPERS ===
 
-// 1) Para la vista vista_materias_planes
 function mapMateriaPlanRowToPlanRecord(row: MateriaPlanRow): PlanRecord {
   return {
     id: row.materia_id,
@@ -60,24 +54,6 @@ function mapMateriaPlanRowToPlanRecord(row: MateriaPlanRow): PlanRecord {
     plan_version: row.plan_version,
     plan_total_creditos: row.total_creditos,
     plan_semestres_sugeridos: row.semestres_sugeridos,
-  };
-}
-
-// 2) Para la tabla materia + relación plan_estudio
-function mapMateriaRowToPlanRecord(row: MateriaRow): PlanRecord {
-  const plan = Array.isArray(row.plan) ? row.plan[0] : row.plan ?? null;
-
-  return {
-    id: row.id,
-    codigo: row.codigo,
-    nombre_materia: row.nombre,
-    creditos: row.creditos,
-    tipo: row.tipo ?? "OBLIGATORIA",
-    plan_id: row.plan_estudio_id,
-    plan_nombre: plan?.nombre ?? "Sin plan",
-    plan_version: plan?.version ?? "N/A",
-    plan_total_creditos: plan?.total_creditos ?? null,
-    plan_semestres_sugeridos: plan?.semestres_sugeridos ?? null,
   };
 }
 
@@ -140,13 +116,24 @@ export async function getPlanesCatalog(): Promise<PlanOption[]> {
   }));
 }
 
-// === LISTADO DE MATERIAS POR PLAN ===
+// === LISTADO DE MATERIAS POR PLAN (vista) ===
 
 export async function getPlanMaterias(): Promise<PlanRecord[]> {
   const { data, error } = await supabase
     .from("vista_materias_planes")
     .select(
-      "materia_id, codigo, nombre, creditos, tipo, plan_id, plan_nombre, plan_version, total_creditos, semestres_sugeridos"
+      `
+      materia_id,
+      codigo,
+      nombre,
+      creditos,
+      tipo,
+      plan_id,
+      plan_nombre,
+      plan_version,
+      total_creditos,
+      semestres_sugeridos
+    `
     )
     .order("codigo");
 
@@ -179,85 +166,108 @@ function mapFormToMateriaPayload(form: PlanMateriaFormData) {
   };
 }
 
+// Crear materia + relación en materia_plan
 export async function createPlanMateria(
   form: PlanMateriaFormData
-): Promise<PlanRecord> {
+): Promise<void> {
   const payload = mapFormToMateriaPayload(form);
 
+  // 1) Insertar en materia (solo necesitamos el id)
   const { data, error } = await supabase
     .from("materia")
     .insert([payload])
-    .select(
-      `
-      id,
-      codigo,
-      nombre,
-      creditos,
-      tipo,
-      plan_estudio_id,
-      plan:plan_estudio (
-        id,
-        nombre,
-        version,
-        total_creditos,
-        semestres_sugeridos
-      )
-    `
-    )
-    .single();
+    .select("id");
 
   if (error) {
     console.error("Error al crear materia de plan:", error);
-    throw error;
+    throw new Error(error.message || "Error al crear materia de plan");
   }
 
-  // aquí data tiene shape MateriaRow, así que usamos el mapper correcto
-  return mapMateriaRowToPlanRecord(data as MateriaRow);
+  const row = (data?.[0] ?? null) as { id: number } | null;
+  if (!row) {
+    throw new Error("No se pudo obtener el ID de la materia recién creada.");
+  }
+
+  // 2) Asociar en materia_plan para que aparezca en la vista
+  const { error: mpError } = await supabase.from("materia_plan").insert({
+    materia_id: row.id,
+    plan_estudio_id: payload.plan_estudio_id,
+  });
+
+  if (mpError) {
+    console.error("Error al asociar materia con plan (materia_plan):", mpError);
+    throw new Error(
+      mpError.message ||
+        "La materia se creó pero no se pudo asociar al plan de estudio."
+    );
+  }
+
+  // No regresamos nada: el front recargará la lista desde la vista
 }
 
+// Actualizar materia (solo UPDATE; la vista se recarga después)
 export async function updatePlanMateria(
   id: number,
   form: PlanMateriaFormData
-): Promise<PlanRecord> {
+): Promise<void> {
   const payload = mapFormToMateriaPayload(form);
 
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from("materia")
     .update(payload)
-    .eq("id", id)
-    .select(
-      `
-      id,
-      codigo,
-      nombre,
-      creditos,
-      tipo,
-      plan_estudio_id,
-      plan:plan_estudio (
-        id,
-        nombre,
-        version,
-        total_creditos,
-        semestres_sugeridos
-      )
-    `
-    )
-    .single();
+    .eq("id", id);
 
   if (error) {
-    console.error("Error al actualizar materia de plan:", error);
-    throw error;
+    console.error("❌ Error al actualizar materia de plan (Supabase):", error);
+
+    const parts = [
+      error.message,
+      error.details,
+      error.hint,
+      error.code && `Código: ${error.code}`,
+    ].filter(Boolean);
+
+    const msg =
+      parts.join(" | ") ||
+      "No se pudo actualizar la materia de plan en la base de datos.";
+
+    throw new Error(msg);
   }
 
-  return mapMateriaRowToPlanRecord(data as MateriaRow);
+  // La relación en materia_plan no cambia si solo modificas código/nombre/créditos/tipo/plan_id.
+  // Si quisieras cambiar de plan, tendríamos que actualizar materia_plan también.
 }
 
+// Eliminar materia: primero materia_plan, luego materia
 export async function deletePlanMateria(id: number): Promise<void> {
+  // 1) Borrar asociaciones en materia_plan para evitar violación de FK
+  const { error: mpError } = await supabase
+    .from("materia_plan")
+    .delete()
+    .eq("materia_id", id);
+
+  if (mpError) {
+    console.error("Error al eliminar asociaciones en materia_plan:", mpError);
+    throw new Error(
+      mpError.message ||
+        "No se pudo eliminar la asociación de la materia con su plan de estudio."
+    );
+  }
+
+  // 2) Borrar materia
   const { error } = await supabase.from("materia").delete().eq("id", id);
 
   if (error) {
     console.error("Error al eliminar materia de plan:", error);
-    throw error;
+    const msg = extractErrorMessage(error);
+
+    if (msg.includes("violates foreign key constraint")) {
+      throw new Error(
+        "No se puede eliminar esta materia porque está asociada a grupos, kardex u otros registros."
+      );
+    }
+
+    throw new Error("No se pudo eliminar la materia. Intenta de nuevo más tarde.");
   }
 }
 
@@ -332,4 +342,3 @@ export async function uploadPlanPdf(
   const json = (await resp.json()) as PlanUploadResponse;
   return json;
 }
-

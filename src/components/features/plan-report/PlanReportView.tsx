@@ -343,11 +343,15 @@ const getEstadoPillClasses = (estado: string) => {
       });
     } catch (err) {
       console.error("Error al eliminar materia de plan:", err);
+      const message =
+        err instanceof Error
+          ? err.message
+          : "No se pudo eliminar la materia del plan de estudios. Intenta de nuevo más tarde.";
+
       setAlert({
         kind: "error",
         title: "Error al eliminar",
-        message:
-          "No se pudo eliminar la materia del plan de estudios. Intenta de nuevo más tarde.",
+        message,
       });
     } finally {
       setShowDeleteModal(false);
@@ -373,55 +377,63 @@ const getEstadoPillClasses = (estado: string) => {
     }));
   };
 
-  const handleSaveEdit = async () => {
-    if (
-      !editForm.codigo.trim() ||
-      !editForm.nombre_materia.trim() ||
-      !editForm.plan_id
-    ) {
-      const msg = "Código, nombre de materia y plan son obligatorios.";
-      setAlert({
-        kind: "error",
-        title: "Datos incompletos",
-        message: msg,
-      });
-      return;
+   const handleSaveEdit = async () => {
+  if (
+    !editForm.codigo.trim() ||
+    !editForm.nombre_materia.trim() ||
+    !editForm.plan_id
+  ) {
+    const msg = "Código, nombre de materia y plan son obligatorios.";
+    setAlert({
+      kind: "error",
+      title: "Datos incompletos",
+      message: msg,
+    });
+    return;
+  }
+
+  try {
+    if (editMode === "edit" && editingRecord) {
+      // 1) Actualizar en Supabase
+      await updatePlanMateria(editingRecord.id, editForm);
+      // 2) Recargar lista desde la vista
+      const fresh = await getPlanMaterias();
+      setRecords(fresh);
+    } else if (editMode === "create") {
+      // 1) Crear en Supabase
+      await createPlanMateria(editForm);
+      // 2) Recargar lista desde la vista
+      const fresh = await getPlanMaterias();
+      setRecords(fresh);
+      setCurrentPage(1);
     }
 
-    try {
-      if (editMode === "edit" && editingRecord) {
-        const updated = await updatePlanMateria(editingRecord.id, editForm);
-        setRecords((prev) =>
-          prev.map((r) => (r.id === updated.id ? updated : r))
-        );
-      } else if (editMode === "create") {
-        const created = await createPlanMateria(editForm);
-        setRecords((prev) => [created, ...prev]);
-        setCurrentPage(1);
-      }
+    handleCloseEditModal();
 
-      handleCloseEditModal();
+    setAlert({
+      kind: "success",
+      title: editMode === "create" ? "Materia creada" : "Materia actualizada",
+      message:
+        editMode === "create"
+          ? "La materia se agregó correctamente al plan de estudios."
+          : "Los cambios de la materia se guardaron correctamente.",
+    });
+  } catch (err) {
+    console.error("Error al guardar materia de plan:", err);
+    const message =
+      err instanceof Error
+        ? err.message
+        : "Ocurrió un error al guardar la materia de plan.";
 
-      setAlert({
-        kind: "success",
-        title:
-          editMode === "create"
-            ? "Materia creada"
-            : "Materia actualizada",
-        message:
-          editMode === "create"
-            ? "La materia se agregó correctamente al plan de estudios."
-            : "Los cambios de la materia se guardaron correctamente.",
-      });
-    } catch (err) {
-      console.error("Error al guardar materia de plan:", err);
-      setAlert({
-        kind: "error",
-        title: "Error al guardar",
-        message: "Ocurrió un error al guardar la materia de plan.",
-      });
-    }
-  };
+    setAlert({
+      kind: "error",
+      title: "Error al guardar",
+      message,
+    });
+  }
+};
+
+
 
 
   // === RENDER ===
